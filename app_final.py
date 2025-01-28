@@ -6,6 +6,8 @@ import smtplib
 import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from telethon.tl.functions.contacts import ImportContactsRequest
+from telethon.tl.types import InputPhoneContact
 
 # Credenciales obtenidas de my.telegram.org
 API_ID = '11693772'
@@ -56,47 +58,80 @@ async def enviar_correo(destinatario, asunto, mensaje_html, log_output):
         log_output.update()
 
 
+# async def enviar_mensaje(destinatario, mensaje, log_output):
+#     try:
+#         # Crear cliente de Telethon
+#         async with TelegramClient('session_name', API_ID, API_HASH) as client:
+#             # Intentar enviar el mensaje directamente
+#             await asyncio.wait_for(client.send_message(destinatario, mensaje), timeout=4)
 
-async def enviar_mensaje(destinatario, mensaje, log_output):
-    try:
-        # Crear cliente de Telethon
-        async with TelegramClient('session_name', API_ID, API_HASH) as client:
-            # Verificar si el destinatario es válido
+#         # Si no hay excepciones, el mensaje se envió correctamente
+#         log_output.value = f"Mensaje enviado correctamente a {destinatario}"
+#         log_output.color = "green"
+#         log_output.update()
+#         return True
+#     except asyncio.TimeoutError:
+#         log_output.value = f"Error: El envío del mensaje a {destinatario} superó el tiempo límite de 4 segundos."
+#         log_output.color = "red"
+#     except Exception as e:
+#         log_output.value = f"Error enviando mensaje a {destinatario}: {str(e)}"
+#         log_output.color = "red"
+
+#     log_output.update()
+#     return False
+
+async def enviar_mensaje(destinatario, mensaje, log_output, first_name):
+    async with TelegramClient('session_name', API_ID, API_HASH) as client:
+        try:
+            # Intentar enviar el mensaje directamente
+            await client.send_message(destinatario, mensaje)
+            log_output.value = f"Mensaje enviado correctamente a {destinatario}"
+            log_output.color = "green"
+            log_output.update()
+            return True
+        except Exception as e:
+            log_output.value = f"No se pudo enviar el mensaje a {destinatario}. Intentando agregar el contacto..."
+            log_output.color = "orange"
+            log_output.update()
+            print(f"No se pudo enviar el mensaje: {e}")
+
+            # Validar y preparar el número de teléfono
+            if not destinatario.startswith("+"):
+                destinatario = f"+{destinatario}"
+
             try:
-                entidad = await client.get_entity(destinatario)
-            except Exception as e:
-                log_output.value = f"El destinatario {destinatario} no es válido: {str(e)}"
-                log_output.color = "red"
-                log_output.update()
-                return False
+                # Crear un contacto temporal
+                contacto = InputPhoneContact(
+                    client_id=0,  # ID único temporal
+                    phone=destinatario,
+                    first_name=first_name,
+                    last_name="Temp"
+                )
+                result = await client(ImportContactsRequest([contacto]))
+                if result.users:
+                    log_output.value = f"Contacto {destinatario} agregado exitosamente. Reintentando enviar mensaje..."
+                    log_output.color = "blue"
+                    log_output.update()
+                    print(f"Contacto agregado: {result.users[0].first_name}")
 
-            # Intentar enviar el mensaje
-            try:
-                respuesta = await client.send_message(entidad, mensaje)
-
-                # Validar si la respuesta tiene un mensaje válido
-                if respuesta and hasattr(respuesta, "id"):
-                    log_output.value = f"Mensaje enviado correctamente a {destinatario} (ID: {respuesta.id})"
+                    # Reintentar enviar el mensaje
+                    await client.send_message(destinatario, mensaje)
+                    log_output.value = f"Mensaje enviado correctamente a {destinatario} después de agregarlo."
                     log_output.color = "green"
                     log_output.update()
                     return True
                 else:
-                    log_output.value = f"Error al verificar el envío del mensaje a {destinatario}."
+                    log_output.value = f"No se pudo agregar el contacto {destinatario}."
                     log_output.color = "red"
                     log_output.update()
+                    print("No se pudo agregar el contacto.")
                     return False
-            except Exception as e:
-                log_output.value = f"Error enviando mensaje a {destinatario}: {str(e)}"
+            except Exception as contact_error:
+                log_output.value = f"Error al agregar el contacto: {str(contact_error)}"
                 log_output.color = "red"
                 log_output.update()
+                print(f"Error al agregar el contacto: {contact_error}")
                 return False
-
-    except Exception as e:
-        # Manejar errores generales (red, autenticación, etc.)
-        log_output.value = f"Error general: {str(e)}"
-        log_output.color = "red"
-        log_output.update()
-        return False
 
 
 def main(page: ft.Page):
@@ -198,7 +233,7 @@ def main(page: ft.Page):
         options=[
             ft.dropdown.Option(mensaje) for mensaje in mensajes_dropbox
         ],
-        width=600,
+        width=800,
         height=50,
         focused_border_color=ft.colors.BLACK26,
         border_color=ft.colors.BLACK87,  # Cambia el color del borde cuando no está enfocado
@@ -211,7 +246,16 @@ def main(page: ft.Page):
             color=ft.colors.BLACK87,
             size=12,
         ),
+        on_change=lambda e: on_dropdown_change(e)
     )
+    # Función que se ejecuta al cambiar la opción del Dropdown
+
+    def on_dropdown_change(e):
+        global matriz_resultados
+        # Si la matriz ya está inicializada, cambia todos los valores de la tercera columna a False
+        if 'matriz_resultados' in globals():
+            for fila in matriz_resultados:
+                fila[2] = False  # Reinicia el estado de envío a False
 
     log_output = ft.Text(value="", color="green")
 
@@ -257,7 +301,7 @@ def main(page: ft.Page):
 
               # Crear las columnas y filas para el DataTable
             data_table = ft.DataTable(
-                columns=[ 
+                columns=[
                     ft.DataColumn(
                         ft.Text(col, weight="bold", size=14, color="white"),
                         tooltip=f"Columna: {col}",
@@ -274,7 +318,8 @@ def main(page: ft.Page):
                                     color="black",
                                     tooltip=f"Dato: {cell}"
                                 ),
-                                on_tap=lambda e, cell=cell: print(f"Seleccionaste: {cell}")
+                                on_tap=lambda e, cell=cell: print(
+                                    f"Seleccionaste: {cell}")
                             )
                             for cell in row
                         ],
@@ -297,12 +342,11 @@ def main(page: ft.Page):
                 height=300  # Establecer la altura para hacer que el DataTable sea desplazable
             )
 
-        
             page.controls.clear()
 
             ContaInput = ft.Container(
                 content=mensaje_input,
-                width=400,
+                width=800,
                 height=45,
             )
 
@@ -338,7 +382,6 @@ def main(page: ft.Page):
     # Agregar el SnackBar y el botón al contenido de la página
     log_output = ft.Text(value="", color="green")
 
-   
     def actualizar_tabla(page):
         global df
         # Crear una nueva tabla basada en el DataFrame actualizado
@@ -378,42 +421,36 @@ def main(page: ft.Page):
         )
 
         scrollable_container = ft.Column(
-                controls=[data_table],
-                scroll=ft.ScrollMode.AUTO,  # Habilitar desplazamiento
-                height=300  # Establecer la altura para hacer que el DataTable sea desplazable
-            )
-     
+            controls=[data_table],
+            scroll=ft.ScrollMode.AUTO,  # Habilitar desplazamiento
+            height=300  # Establecer la altura para hacer que el DataTable sea desplazable
+        )
 
         # Actualizar la página con la nueva tabla
         page.controls.clear()
         page.add(titulo_centrado, scrollable_container, ft.Text(
-            "Actualización completa.", color=ft.colors.BLACK87), mensaje_input, iconos, log_output, snack_bar,)
+            "Actualización completa.", color=ft.colors.BLACK87),btn_cargar, mensaje_input, iconos, log_output, snack_bar,)
         page.update()
 
-    
-    
-  
     async def on_enviar_click(e, metodo_envio):
-        global vector_3, vector_4, df, vector_deuna, vector_nombre
 
+        global vector_3, vector_4, df, vector_deuna, vector_nombre
         if not vector_3 or (metodo_envio == "correo" and not vector_4):
             log_output.value = "El vector está vacío. Carga un archivo primero."
             log_output.color = "red"
             log_output.update()
             return
-
         log_output.value = "Iniciando el envío de mensajes..."
         log_output.update()
 
         global matriz_resultados
-        if not matriz_resultados:
-            matriz_resultados = [[numero, vector_4[i] if i < len(vector_4) else None, False] for i, numero in enumerate(vector_3)]
 
-      
+        if not matriz_resultados:
+            matriz_resultados = [[numero, vector_4[i] if i < len(
+                vector_4) else None, False] for i, numero in enumerate(vector_3)]
 
         for i, fila in enumerate(matriz_resultados):
             numero, destinatario, enviado = fila
-
             # Solo intentar enviar si no se ha enviado previamente
             if not enviado:
                 try:
@@ -436,11 +473,13 @@ def main(page: ft.Page):
                     log_output.update()
 
                     if metodo_envio == "telegram":
-                        resultado_envio = await enviar_mensaje(destinatario, mensaje, log_output)
+                        #resultado_envio = await enviar_mensaje(destinatario, mensaje, log_output)
+                        resultado_envio = await enviar_mensaje(destinatario, mensaje, log_output, vector_nombre[i])
+                        print(f'************************{vector_nombre[i]}')
                         enviado = bool(resultado_envio)
                         estado_envio = "Enviado a Telegram" if enviado else "No enviado (Telegram)"
                     elif metodo_envio == "correo":
-                        asunto = "Asunto predeterminado"
+                        asunto = "Mensaje de prueba"
                         html_content = f"<html><body>{mensaje}</body></html>"
                         await enviar_correo(destinatario, asunto, html_content, log_output)
                         enviado = True
@@ -458,17 +497,14 @@ def main(page: ft.Page):
 
         # Actualizar tabla y mostrar resultado final
         actualizar_tabla(page)
-        log_output.value = "Envío completado." if all(fila[2] for fila in matriz_resultados) else "Envío completado con errores."
+        log_output.value = "Envío completado." if all(
+            fila[2] for fila in matriz_resultados) else "Envío completado con errores."
         log_output.update()
 
         # Mostrar la matriz de resultados
         print("Matriz de resultados:")
         for fila in matriz_resultados:
             print(fila)
-
-
-
-  
 
     ColumnI = ft.Column(
         controls=[
