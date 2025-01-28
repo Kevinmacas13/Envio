@@ -2,6 +2,11 @@ import flet as ft
 from telethon import TelegramClient
 import asyncio
 import pandas as pd
+import smtplib
+import ssl
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+
 # Credenciales obtenidas de my.telegram.org
 API_ID = '11693772'
 API_HASH = 'a7ef421e8d6d4435dc4b1fc37260236a'
@@ -11,41 +16,111 @@ API_HASH = 'a7ef421e8d6d4435dc4b1fc37260236a'
 df = None
 vector_3 = []
 vector_4 = []
+matriz_resultados = []
+
+# Configuración global del servidor SMTP
+SMTP_SERVER = "devzone.ec"
+SMTP_PORT = 465
+EMAIL = "kevin.macas@devzone.ec"
+PASSWORD = "-Kevin7-#1992"
+
+# Mensajes
+mensajes_dropbox = [
+    "Estimado usuario, le recordamos que tiene una deuda de deuna",
+    "Le recordamos que la venta de mantenimiento está programada para",
+    "Gracias por tu tiempo, usuario.",
+    "Por favor, espera un momento."
+]
+
+
+async def enviar_correo(destinatario, asunto, mensaje_html, log_output):
+    try:
+        # Crear el mensaje de correo
+        mensaje = MIMEMultipart("alternative")
+        mensaje["From"] = f"DevZone <{EMAIL}>"
+        mensaje["To"] = destinatario if isinstance(
+            destinatario, str) else ", ".join(destinatario)
+        mensaje["Subject"] = asunto
+        mensaje.attach(MIMEText(mensaje_html, "html"))
+        # Enviar el correo
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT, context=context) as server:
+            server.login(EMAIL, PASSWORD)  # Autenticación
+            server.sendmail(EMAIL, destinatario,
+                            mensaje.as_string())  # Enviar correo
+        # Actualizar el log de salida
+        log_output.value = f"Correo enviado exitosamente a {destinatario}"
+        log_output.update()
+    except Exception as e:
+        log_output.value = f"Error al enviar el correo: {str(e)}"
+        log_output.update()
+
 
 
 async def enviar_mensaje(destinatario, mensaje, log_output):
     try:
         # Crear cliente de Telethon
         async with TelegramClient('session_name', API_ID, API_HASH) as client:
-            # Enviar mensaje al destinatario
-            await client.send_message(destinatario, mensaje)
-            log_output.value = f"Mensaje enviado a {destinatario}"
-            log_output.update()
+            # Verificar si el destinatario es válido
+            try:
+                entidad = await client.get_entity(destinatario)
+            except Exception as e:
+                log_output.value = f"El destinatario {destinatario} no es válido: {str(e)}"
+                log_output.color = "red"
+                log_output.update()
+                return False
+
+            # Intentar enviar el mensaje
+            try:
+                respuesta = await client.send_message(entidad, mensaje)
+
+                # Validar si la respuesta tiene un mensaje válido
+                if respuesta and hasattr(respuesta, "id"):
+                    log_output.value = f"Mensaje enviado correctamente a {destinatario} (ID: {respuesta.id})"
+                    log_output.color = "green"
+                    log_output.update()
+                    return True
+                else:
+                    log_output.value = f"Error al verificar el envío del mensaje a {destinatario}."
+                    log_output.color = "red"
+                    log_output.update()
+                    return False
+            except Exception as e:
+                log_output.value = f"Error enviando mensaje a {destinatario}: {str(e)}"
+                log_output.color = "red"
+                log_output.update()
+                return False
+
     except Exception as e:
-        log_output.value = f"Error: {str(e)}"
+        # Manejar errores generales (red, autenticación, etc.)
+        log_output.value = f"Error general: {str(e)}"
+        log_output.color = "red"
         log_output.update()
+        return False
 
 
 def main(page: ft.Page):
-
     page.bgcolor = ft.colors.WHITE
     page.title = "Enviar Mensajes con Telethon"
-    page.window_width = 1200
+    page.window_width = 900
     page.window_height = 800
 
     # Íconos personalizados
     icon_telegram = ft.IconButton(
-        on_click=lambda e: asyncio.run(on_enviar_click(e)),
+        # on_click=lambda e: asyncio.run(on_enviar_click(e)),
+        on_click=lambda e: asyncio.run(on_enviar_click(e, "telegram")),
         icon=ft.icons.SEND,  # Ícono genérico para Telegram
         icon_color="#00ADB5",     # Color típico de Telegram
         icon_size=40,
 
     )
 
-    icon_gmail = ft.Icon(
-        name=ft.icons.EMAIL,  # Ícono genérico para Gmail
-        color="#D14836",      # Color típico de Gmail
-        size=40
+    icon_gmail = ft.IconButton(
+        # on_click=lambda e: asyncio.run(on_enviar_click(e)),
+        on_click=lambda e: asyncio.run(on_enviar_click(e, "correo")),
+        icon=ft.icons.EMAIL,  # Ícono genérico para Gmail
+        icon_color="#D14836",      # Color típico de Gmail
+        icon_size=40
     )
 
     iconos = ft.Column(
@@ -76,7 +151,7 @@ def main(page: ft.Page):
             ft.Container(
                 content=ft.Row(
                     controls=[
-                        ft.Text("Gmail", color="black",
+                        ft.Text("Correo", color="black",
 
                                 size=12,  # Tamaño de la fuente
                                 weight=ft.FontWeight.BOLD,  # Negrita para resaltar
@@ -118,25 +193,33 @@ def main(page: ft.Page):
     # Crear una instancia de SnackBar con contenido inicial vacío
     snack_bar = ft.SnackBar(content=ft.Text(""))
 
-    mensaje_input = ft.TextField(
-        label="Mensaje a enviar", multiline=True, width=200, height=100,
-        focused_border_color=ft.colors.BLACK87,
+    mensaje_input = ft.Dropdown(
+        label="Selecciona un mensaje",
+        options=[
+            ft.dropdown.Option(mensaje) for mensaje in mensajes_dropbox
+        ],
+        width=600,
+        height=50,
+        focused_border_color=ft.colors.BLACK26,
+        border_color=ft.colors.BLACK87,  # Cambia el color del borde cuando no está enfocado
+        bgcolor=ft.colors.AMBER_50,  # Cambia el color de fondo de la barra desplegable
         text_style=ft.TextStyle(
-            size=14,  # Tamaño del texto del input
-            color=ft.colors.BLACK87,  # Texto en negro suave para mejor legibilidad
+            size=14,
+            color=ft.colors.BLACK87,
         ),
-
         label_style=ft.TextStyle(
-            color=ft.colors.BLACK87,  # Color del texto de la etiqueta
-            size=12,  # Tamaño moderado para la etiqueta
+            color=ft.colors.BLACK87,
+            size=12,
         ),
     )
 
     log_output = ft.Text(value="", color="green")
 
     def cargar_excel(e):
+        global vector_nombre
         global vector_3
         global vector_4
+        global vector_deuna
         global df
         try:
             # Verificar si se seleccionó un archivo
@@ -155,8 +238,11 @@ def main(page: ft.Page):
 
             # Guardar la tercera y cuarta columna en vectores
             if len(df.columns) >= 4:  # Verificar si hay suficientes columnas
+                vector_nombre = df.iloc[:, 1].tolist()
                 vector_3 = df.iloc[:, 2].tolist()  # Tercera columna (índice 2)
                 vector_4 = df.iloc[:, 3].tolist()  # Cuarta columna (índice 3)
+                # Cuarta columna (índice 3)
+                vector_deuna = df.iloc[:, 4].tolist()
 
                 print("Tercera columna (vector_3):", vector_3)
                 print("Cuarta columna (vector_4):", vector_4)
@@ -168,8 +254,10 @@ def main(page: ft.Page):
                 return
 
             # Mostrar los datos en la interfaz
+
+              # Crear las columnas y filas para el DataTable
             data_table = ft.DataTable(
-                columns=[
+                columns=[ 
                     ft.DataColumn(
                         ft.Text(col, weight="bold", size=14, color="white"),
                         tooltip=f"Columna: {col}",
@@ -186,8 +274,7 @@ def main(page: ft.Page):
                                     color="black",
                                     tooltip=f"Dato: {cell}"
                                 ),
-                                on_tap=lambda e, cell=cell: print(
-                                    f"Seleccionaste: {cell}")
+                                on_tap=lambda e, cell=cell: print(f"Seleccionaste: {cell}")
                             )
                             for cell in row
                         ],
@@ -203,22 +290,23 @@ def main(page: ft.Page):
                 show_bottom_border=True,
             )
 
-            # Limpiar el contenido de la página y mostrar la tabla
-            page.controls.clear()
-            ContainerDT = ft.Container(
-                content=data_table,
-                alignment=ft.alignment.center
+            # Crear un contenedor con desplazamiento y agregar el DataTable
+            scrollable_container = ft.Column(
+                controls=[data_table],
+                scroll=ft.ScrollMode.AUTO,  # Habilitar desplazamiento
+                height=300  # Establecer la altura para hacer que el DataTable sea desplazable
             )
 
-            # ColumnTa = ft.Column(
-            #     controls=[
-            #         mensaje_input,
-            #         iconos,
+        
+            page.controls.clear()
 
-            #     ]
-            # )
+            ContaInput = ft.Container(
+                content=mensaje_input,
+                width=400,
+                height=45,
+            )
 
-            page.add(titulo_centrado, data_table, mensaje_input, ft.Text(f"Archivo cargado: {file_path}", color=ft.colors.BLACK87), iconos, log_output,
+            page.add(titulo_centrado, ft.Text(f"Archivo cargado: {file_path}", color=ft.colors.BLACK87), scrollable_container, ContaInput, iconos, log_output,
                      snack_bar,)
             page.update()
 
@@ -250,21 +338,7 @@ def main(page: ft.Page):
     # Agregar el SnackBar y el botón al contenido de la página
     log_output = ft.Text(value="", color="green")
 
-    global numero_envio
-    numero_envio = "995365458"
-
-    # async def on_enviar_click(e):
-    #     destinatario = "+593"+numero_envio
-    #     mensaje = mensaje_envio
-    #     if destinatario and mensaje:
-    #         log_output.value = "Enviando mensaje..."
-    #         log_output.update()
-    #         await enviar_mensaje(destinatario, mensaje, log_output)
-    #     else:
-    #         log_output.value = "Por favor, completa todos los campos."
-    #         log_output.color = "red"
-    #         log_output.update()
-
+   
     def actualizar_tabla(page):
         global df
         # Crear una nueva tabla basada en el DataFrame actualizado
@@ -303,16 +377,26 @@ def main(page: ft.Page):
             show_bottom_border=True,
         )
 
+        scrollable_container = ft.Column(
+                controls=[data_table],
+                scroll=ft.ScrollMode.AUTO,  # Habilitar desplazamiento
+                height=300  # Establecer la altura para hacer que el DataTable sea desplazable
+            )
+     
+
         # Actualizar la página con la nueva tabla
         page.controls.clear()
-        page.add(titulo_centrado, data_table, ft.Text(
-            "Actualización completa.", color=ft.colors.BLACK87), iconos, log_output, snack_bar,)
+        page.add(titulo_centrado, scrollable_container, ft.Text(
+            "Actualización completa.", color=ft.colors.BLACK87), mensaje_input, iconos, log_output, snack_bar,)
         page.update()
 
-    async def on_enviar_click(e):
-        global vector_3, df  # Usar el DataFrame y el vector globales
+    
+    
+  
+    async def on_enviar_click(e, metodo_envio):
+        global vector_3, vector_4, df, vector_deuna, vector_nombre
 
-        if not vector_3:
+        if not vector_3 or (metodo_envio == "correo" and not vector_4):
             log_output.value = "El vector está vacío. Carga un archivo primero."
             log_output.color = "red"
             log_output.update()
@@ -321,36 +405,70 @@ def main(page: ft.Page):
         log_output.value = "Iniciando el envío de mensajes..."
         log_output.update()
 
-        for i, numero in enumerate(vector_3):
-            destinatario = f"+593{numero}"  # Formatear el número
-           # mensaje = vector_4[i] if i < len(vector_4) else "Mensaje predeterminado"  # Mensaje asociado
-            mensaje = "Mensaje predeterminado"
-            mensaje = mensaje_input.value
-            if destinatario and mensaje:
-                log_output.value = f"Enviando mensaje a {destinatario}..."
-                log_output.update()
+        global matriz_resultados
+        if not matriz_resultados:
+            matriz_resultados = [[numero, vector_4[i] if i < len(vector_4) else None, False] for i, numero in enumerate(vector_3)]
+
+      
+
+        for i, fila in enumerate(matriz_resultados):
+            numero, destinatario, enviado = fila
+
+            # Solo intentar enviar si no se ha enviado previamente
+            if not enviado:
                 try:
-                    # Llamar a la función de envío
-                    await enviar_mensaje(destinatario, mensaje, log_output)
-                    # Actualizar el estado en el DataFrame
-                    df.at[i, "Estado"] = "Enviado"
-                    log_output.value = f"Mensaje enviado a {destinatario}."
+                    if metodo_envio == "telegram":
+                        destinatario = f"+593{numero}"
+                    elif metodo_envio == "correo":
+                        destinatario = fila[1]
+
+                    if not destinatario:
+                        log_output.value = f"Faltan datos para enviar a {numero}."
+                        log_output.color = "red"
+                        log_output.update()
+                        continue
+
+                    mensaje = mensaje_input.value or "Mensaje predeterminado"
+                    if mensajes_dropbox.index(mensaje_input.value) == 0 and vector_deuna[i] > 0:
+                        mensaje = f"Estimado {vector_nombre[i]}, le recordamos que tiene una deuda de {vector_deuna[i]}"
+
+                    log_output.value = f"Enviando {metodo_envio} a {destinatario}..."
+                    log_output.update()
+
+                    if metodo_envio == "telegram":
+                        resultado_envio = await enviar_mensaje(destinatario, mensaje, log_output)
+                        enviado = bool(resultado_envio)
+                        estado_envio = "Enviado a Telegram" if enviado else "No enviado (Telegram)"
+                    elif metodo_envio == "correo":
+                        asunto = "Asunto predeterminado"
+                        html_content = f"<html><body>{mensaje}</body></html>"
+                        await enviar_correo(destinatario, asunto, html_content, log_output)
+                        enviado = True
+                        estado_envio = "Enviado a Correo"
+
+                    # Actualizar estado en el DataFrame y matriz
+                    df.at[i, "Estado"] = estado_envio
+                    matriz_resultados[i][2] = enviado
+
                 except Exception as ex:
-                    # Registrar error si ocurre
-                    df.at[i, "Estado"] = f"Error: {ex}"
+                    df.at[i, "Estado"] = "Mensaje no enviado"
                     log_output.value = f"Error enviando a {destinatario}: {ex}"
                     log_output.color = "red"
+                    log_output.update()
 
-                log_output.update()
-            else:
-                log_output.value = f"Faltan datos para enviar a {numero}."
-                log_output.color = "red"
-                log_output.update()
-
-        # Refrescar la tabla para mostrar los nuevos estados
+        # Actualizar tabla y mostrar resultado final
         actualizar_tabla(page)
-        log_output.value = "Envío completado."
+        log_output.value = "Envío completado." if all(fila[2] for fila in matriz_resultados) else "Envío completado con errores."
         log_output.update()
+
+        # Mostrar la matriz de resultados
+        print("Matriz de resultados:")
+        for fila in matriz_resultados:
+            print(fila)
+
+
+
+  
 
     ColumnI = ft.Column(
         controls=[
